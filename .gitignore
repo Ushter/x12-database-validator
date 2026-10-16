@@ -1,0 +1,19 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Runtime data and original messages
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.log
+*.hl7
+samples.json
+# Local tools
+.DS_Store
+Thumbs.db
+.vscode/
