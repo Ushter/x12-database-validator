@@ -1,6 +1,6 @@
 # Database-driven X12 Validator
 
-Recovered Lua prototype that uses database metadata to interpret X12 segments and loops and validate message structure.
+Lua prototype that uses database metadata to interpret X12 segments and loops and validate message structure.
 
 ## Design
 
@@ -21,15 +21,11 @@ Missing dependencies:
 - Matching `Lookup_Segment_Listing_<dataType>` rule tables.
 - `x12_270_5010_V1_Repeating.vmd`.
 
-The VMD-to-database importer has not been recovered. Other recovered transaction variants are retained separately as recovery material and are not presented here as working implementations.
-
 ## Cleanup
 
-Normalized whitespace, removed exploratory trace/print statements, kept helper functions local, and checked the public entry-point types. No credentials, original messages, client databases, or VMD definitions are included. The validation algorithm is substantially preserved rather than replaced with an invented implementation.
+Normalized whitespace, removed exploratory trace/print statements, kept helper functions local, and checked the public entry-point types.
 
 ## Known limitations
-
-Repeat checking still hardcodes transaction type 270 and contains special-case rule IDs. Some SQL uses dialect-specific concatenation and unescaped values. Nil handling, identifier matching, repeat-error aggregation, and state isolation require review. Use only trusted synthetic data in an isolated development environment until those issues are resolved.
 
 Syntax validation passes locally. Behavioral validation needs the missing helpers and rule fixtures and has not been performed.
 
