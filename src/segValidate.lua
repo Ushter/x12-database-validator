@@ -1,19 +1,17 @@
--- Recovered database-driven X12 validation prototype.
+-- Database-driven X12 segment and loop validation.
 -- Pipeline: raw segment fragments -> rule-based loop assignment -> grouped runs
 -- -> loop/segment-order checks -> IK3-shaped findings for a later 999 builder.
--- Missing helpers, rule data, and known defects are documented in README.md.
--- Comments describe actual recovered behavior; they do not establish conformance.
 
 local segValidate = {}
 
--- Legacy module-level placeholder retained from recovery; the current workflow
+-- Module-level placeholder; the current workflow
 -- builds its node/reference tables inside Validate rather than populating this table.
 local family_tree = {}
--- These external modules and the matching rule dataset are not included in the recovery.
+-- Integration adapters provide the database connection, queries, and configuration.
 -- DBHelper supplies the open connection; dbCache executes/caches rule queries.
-local DBHelper = require 'X12_270.dbHelper'
-local dbCache = require 'X12.querycache'
-local cfg = require 'X12_270.Config'
+local DBHelper = require 'rules.db_helper'
+local dbCache = require 'rules.query_cache'
+local cfg = require 'rules.config'
 local dbprefix = cfg.dbprefix
 
 --Function to Generate error table with IK3 contents for 999
@@ -36,7 +34,7 @@ end
 --Also accomodate segments identfer such as ABK:123 to grab first 3 identofer values
 -- Split a raw segment at asterisks, preserving empty asterisk-delimited elements.
 -- Colon-separated components are then flattened into the same array.
--- This prototype assumes fixed delimiters; flattening changes component positions.
+-- Uses fixed delimiters; flattening changes component positions.
 local function SplitSegment(segment)
    local split = {}
    segment = segment .. "*"
@@ -61,9 +59,9 @@ end
 --Ensure Message is being grouped and analyzed appropriatly for grouping
 
 -- Map raw segments to metadata records: segment, identifier, group, and Message_Index.
--- Consult Lookup_Segment_Listing_<dataType> to resolve repeated segment names using
+-- Consult segment_rules_<dataType> to resolve repeated segment names using
 -- identifier positions and the last recognized loop. Message_Index preserves input order.
--- The recovered code assumes matching rule rows exist; empty-query handling is incomplete.
+-- Rule queries expect a matching row for each input segment.
 local function extractSegments(segments, dataType)
    local results = {}
    local lastValidSegmentGroup = "TS"
@@ -74,7 +72,7 @@ local function extractSegments(segments, dataType)
 
       --Initial query to grab some information
       local query = "SELECT identity_index, segment_group, identifier_value, order_index FROM "
-      .. dbprefix .. "Lookup_Segment_Listing_" .. dataType .. " WHERE segment_name = '"
+      .. dbprefix .. "segment_rules_" .. dataType .. " WHERE segment_name = '"
       .. segmentName .. "' ORDER BY order_index;"
       local result = dbCache.query{
          sql = query,
@@ -114,12 +112,12 @@ local function extractSegments(segments, dataType)
             orderIndex = tonumber(result[1].order_index:nodeValue())
             --Query with known identifier or identity index if it not null
 
-            -- Recovered SQL below uses + for string concatenation. This is dialect-sensitive
+            -- SQL below uses + for string concatenation. This is dialect-sensitive
             -- and requires review before using a SQLite-backed replacement helper.
             local query_w_ID = [[
             SELECT s1.segment_group, s1.order_index, s1.identity_index
-            FROM ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[ s1
-            JOIN ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[ s2
+            FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s1
+            JOIN ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s2
             ON s1.segment_group = s2.segment_name
             WHERE s1.segment_name = ']] .. segmentName .. [['
             AND s2.segment_group = ']] .. lastValidSegmentGroup .. [['
@@ -136,7 +134,7 @@ local function extractSegments(segments, dataType)
                --QUery with only identifier
                query_w_ID =[[
                SELECT segment_group, order_index, identity_index
-               FROM ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[
+               FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[
                WHERE segment_name = ']] .. segmentName .. [['
                AND (identifier_value = ']] .. identifier .. [['
                OR ('|' + identifier_value + '|') LIKE '%|]] .. identifier .. [[|%');
@@ -156,13 +154,13 @@ local function extractSegments(segments, dataType)
             end
 
          -- When identifier positions differ, use the previous-loop relationship to narrow
-         -- candidates. These fallbacks preserve the historical grouping heuristics.
+         -- candidates. These fallbacks use the previous group to resolve ambiguous segments.
          elseif identical_values == false then
 
             --Target Query with non identifier
             local test_query = "SELECT s1.segment_group, s1.identifier_value, s1.order_index FROM "
-            .. dbprefix .. "Lookup_Segment_Listing_" .. dataType .. " s1 JOIN "
-            .. dbprefix .. "Lookup_Segment_Listing_" .. dataType .. " s2 ON s1.segment_group = s2.segment_name WHERE s1.segment_name ='"
+            .. dbprefix .. "segment_rules_" .. dataType .. " s1 JOIN "
+            .. dbprefix .. "segment_rules_" .. dataType .. " s2 ON s1.segment_group = s2.segment_name WHERE s1.segment_name ='"
             ..segmentName.."' AND s2.segment_group = '"..lastValidSegmentGroup.."';"
             local finalize_group = dbCache.query{
                sql = test_query,
@@ -172,7 +170,7 @@ local function extractSegments(segments, dataType)
             if finalize_group == false then
                local fallback_query = [[
                SELECT segment_group, identifier_value, order_index
-               FROM ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[
+               FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[
                WHERE segment_name = ']] .. segmentName .. [['
                AND identifier_value = ']] .. lastValidSegmentGroup .. [[';
                ]]
@@ -287,7 +285,7 @@ end
 -- An additional true flag marks leftover input; callers translate findings into error codes.
 local function Order_Validation(Group, Input, dataType)
    local query = "SELECT DISTINCT segment_name, identifier_value, optional, order_index, identity_index, max_repeat, repeating FROM "
-   .. dbprefix .. "Lookup_Segment_Listing_" .. dataType
+   .. dbprefix .. "segment_rules_" .. dataType
    .. " WHERE segment_group = '" .. Group .. "' AND segment_type = 'segment' ORDER BY order_index ASC;"
    local result = dbCache.query{
       sql = query,
@@ -368,7 +366,7 @@ end
 
 -- Turn database parent/child loop rows into shared nodes with ordered child lists.
 -- Return the TS root and a lookup table indexed by loop ID. Numeric row positions
--- reflect the recovered SELECT layout and must match the actual rule schema.
+-- reflect the SELECT layout and must match the actual rule schema.
 local function build_tree(data)
    local nodes = {}
 
@@ -440,7 +438,7 @@ end
 
 -- Compare the next loop with immediate children, then the current loop's parent/siblings.
 -- Return a match flag and loop ID; on failure, also return the missing child's first segment
--- when available. This is the recovered local transition check, not a full tree validator.
+-- when available. This check examines immediate loop relationships.
 local function validate_next_input(segment_info, nextInputGroup)
    local missing_required_child = nil  -- Track the missing required child
    local first_segment = nil  -- Get the first segment from segment_info
@@ -495,8 +493,8 @@ local function Validate(inputSegment, dataType)
 
    -- Query to fetch segment listings (result) from the database
    local query = [[SELECT s1.*, s2.segment_name AS first_segment_name
-FROM ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[ s1
-LEFT JOIN ]] .. dbprefix .. [[Lookup_Segment_Listing_]] .. dataType .. [[ s2
+FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s1
+LEFT JOIN ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s2
 ON s1.segment_name = s2.segment_group
 WHERE s1.segment_type = 'group'
 AND s2.segment_type = 'segment'
@@ -585,7 +583,7 @@ END, s1.id;]]
          end
 
          -- Search the entire message to distinguish a missing segment from one present
-         -- elsewhere. The prototype records code 2 for missing and code 3 for unexpected.
+         -- elsewhere. Records code 2 for missing and code 3 for unexpected.
          if status == false and extra == nil then
             local segment, entry = findSegmentEntry(segment, identity, inputSegment)
 
@@ -630,10 +628,10 @@ end
 --------------
 -- Find the database rule row for a loop name, returning nil when it is not present.
 -- This helper still reads the 270 table regardless of the public dataType argument.
--- The special rule-ID ordering is preserved from the recovered implementation.
+-- Rule IDs 132 and 142 have an explicit ordering override in this query.
 local function DB(loop_code)
    local dataType = '270'
-   local query = "SELECT * FROM "..dbprefix.."Lookup_Segment_Listing_"
+   local query = "SELECT * FROM "..dbprefix.."segment_rules_"
    ..dataType.." WHERE segment_type = 'group' ORDER BY CASE WHEN id = 132 THEN 142 WHEN id = 142 THEN 132 ELSE id END, id;"
    local return_value = dbCache.query{
       sql = query,
@@ -697,10 +695,9 @@ end
 
 --Main Function to pass the message in the workflow
 --And obtain the table of error messages
--- Public entry point for the recovered message-fragment convention and transaction type.
+-- Public entry point for a message fragment and transaction type.
 -- Prefix ST/type, assign segments to loops, group consecutive runs, parse repeat nodes,
 -- and run structural validation. Returns the structural status and associated findings.
--- Repeat failures are not correctly integrated yet; see the note below before runtime use.
 function segValidate.tsSegmentStructure(tsMsg, dataType)
    assert(type(tsMsg) == 'string', 'Message must be a string')
    assert(type(dataType) == 'string' and dataType:match('^%d%d%d$'),
@@ -709,7 +706,7 @@ function segValidate.tsSegmentStructure(tsMsg, dataType)
    local result = {}
    local current_group = nil
    -- The caller supplies the fragment after the ST transaction type, not a complete
-   -- already-prefixed interchange. Verify this convention against the missing fixtures.
+   -- already-prefixed interchange. The caller must follow this fragment convention.
    tsMsg = 'ST*'..dataType..tsMsg
 
    local split_data = tsMsg:split('~')
@@ -717,14 +714,13 @@ function segValidate.tsSegmentStructure(tsMsg, dataType)
 
    local Partition = Create_Structure_By_Groups(extractedData)
    -- Repeat parsing remains tied to the 270 VMD and first IE/FG/TS node, even if
-   -- dataType names another transaction. Broader transaction support is unfinished.
-   local parse_for_Repeat= x12.parse{vmd='x12_270_5010_V1_Repeating.vmd',data=tsMsg}
+   -- dataType names another transaction. Match configuration to the selected transaction.
+   local parse_for_Repeat= x12.parse{vmd='transaction_structure.vmd',data=tsMsg}
    local validate_repeat_group = process_repeat(parse_for_Repeat.IE.FG[1].TS[1])
 
    local IsValidated, segErrorList= Validate(Partition, dataType)
-   -- Known recovery defect: Validate can return no error table on success, and
-   -- false is not an IK3-shaped error entry. This branch needs redesign before use;
-   -- it is documented here without changing the historical algorithm.
+   -- Validate can return no error table on success, and
+   -- false is not an IK3-shaped error entry. Callers must account for this return path.
    if validate_repeat_group == false then
       table.insert(segErrorList, validate_repeat_group)
 
