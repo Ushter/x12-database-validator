@@ -8,11 +8,11 @@ local segValidate = {}
 -- builds its node/reference tables inside Validate rather than populating this table.
 local family_tree = {}
 -- Integration adapters provide the database connection, queries, and configuration.
--- DBHelper supplies the open connection; dbCache executes/caches rule queries.
-local DBHelper = require 'rules.db_helper'
-local dbCache = require 'rules.query_cache'
-local cfg = require 'rules.config'
-local dbprefix = cfg.dbprefix
+-- database supplies the open connection; queryService executes/caches rule queries.
+local database = require 'database'
+local queryService = require 'query_service'
+local settings = require 'settings'
+local tablePrefix = settings.tablePrefix
 
 --Function to Generate error table with IK3 contents for 999
 -- Append one validation finding to the supplied error array and return that array.
@@ -72,11 +72,11 @@ local function extractSegments(segments, dataType)
 
       --Initial query to grab some information
       local query = "SELECT identity_index, segment_group, identifier_value, order_index FROM "
-      .. dbprefix .. "segment_rules_" .. dataType .. " WHERE segment_name = '"
+      .. tablePrefix .. "segment_rules_" .. dataType .. " WHERE segment_name = '"
       .. segmentName .. "' ORDER BY order_index;"
-      local result = dbCache.query{
+      local result = queryService.query{
          sql = query,
-         db = DBHelper.conn
+         db = database.conn
       }
 
       local identityIndex
@@ -116,17 +116,17 @@ local function extractSegments(segments, dataType)
             -- and requires review before using a SQLite-backed replacement helper.
             local query_w_ID = [[
             SELECT s1.segment_group, s1.order_index, s1.identity_index
-            FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s1
-            JOIN ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s2
+            FROM ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[ s1
+            JOIN ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[ s2
             ON s1.segment_group = s2.segment_name
             WHERE s1.segment_name = ']] .. segmentName .. [['
             AND s2.segment_group = ']] .. lastValidSegmentGroup .. [['
             AND (s1.identifier_value = ']] .. identifier .. [['
             OR ('|' + s1.identifier_value + '|') LIKE '%|]] .. identifier .. [[|%');
             ]]
-            local result_w_ID = dbCache.query{
+            local result_w_ID = queryService.query{
                sql = query_w_ID,
-               db = DBHelper.conn
+               db = database.conn
             }
 
             if result_w_ID == false or #result_w_ID == 0 then
@@ -134,14 +134,14 @@ local function extractSegments(segments, dataType)
                --QUery with only identifier
                query_w_ID =[[
                SELECT segment_group, order_index, identity_index
-               FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[
+               FROM ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[
                WHERE segment_name = ']] .. segmentName .. [['
                AND (identifier_value = ']] .. identifier .. [['
                OR ('|' + identifier_value + '|') LIKE '%|]] .. identifier .. [[|%');
                ]]
-               result_w_ID = dbCache.query{
+               result_w_ID = queryService.query{
                   sql = query_w_ID,
-                  db = DBHelper.conn
+                  db = database.conn
                }
 
             end
@@ -159,24 +159,24 @@ local function extractSegments(segments, dataType)
 
             --Target Query with non identifier
             local test_query = "SELECT s1.segment_group, s1.identifier_value, s1.order_index FROM "
-            .. dbprefix .. "segment_rules_" .. dataType .. " s1 JOIN "
-            .. dbprefix .. "segment_rules_" .. dataType .. " s2 ON s1.segment_group = s2.segment_name WHERE s1.segment_name ='"
+            .. tablePrefix .. "segment_rules_" .. dataType .. " s1 JOIN "
+            .. tablePrefix .. "segment_rules_" .. dataType .. " s2 ON s1.segment_group = s2.segment_name WHERE s1.segment_name ='"
             ..segmentName.."' AND s2.segment_group = '"..lastValidSegmentGroup.."';"
-            local finalize_group = dbCache.query{
+            local finalize_group = queryService.query{
                sql = test_query,
-               db = DBHelper.conn
+               db = database.conn
             }
             --target query with same identifiers such as TRN that posess complications
             if finalize_group == false then
                local fallback_query = [[
                SELECT segment_group, identifier_value, order_index
-               FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[
+               FROM ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[
                WHERE segment_name = ']] .. segmentName .. [['
                AND identifier_value = ']] .. lastValidSegmentGroup .. [[';
                ]]
-               local fallback_result = dbCache.query{
+               local fallback_result = queryService.query{
                   sql = fallback_query,
-                  db = DBHelper.conn
+                  db = database.conn
                }
 
                --FOR EQ if it is out of place
@@ -285,11 +285,11 @@ end
 -- An additional true flag marks leftover input; callers translate findings into error codes.
 local function Order_Validation(Group, Input, dataType)
    local query = "SELECT DISTINCT segment_name, identifier_value, optional, order_index, identity_index, max_repeat, repeating FROM "
-   .. dbprefix .. "segment_rules_" .. dataType
+   .. tablePrefix .. "segment_rules_" .. dataType
    .. " WHERE segment_group = '" .. Group .. "' AND segment_type = 'segment' ORDER BY order_index ASC;"
-   local result = dbCache.query{
+   local result = queryService.query{
       sql = query,
-      db = DBHelper.conn
+      db = database.conn
    }
 
    -- j points to the next input segment not yet consumed. The outer loop walks
@@ -493,8 +493,8 @@ local function Validate(inputSegment, dataType)
 
    -- Query to fetch segment listings (result) from the database
    local query = [[SELECT s1.*, s2.segment_name AS first_segment_name
-FROM ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s1
-LEFT JOIN ]] .. dbprefix .. [[segment_rules_]] .. dataType .. [[ s2
+FROM ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[ s1
+LEFT JOIN ]] .. tablePrefix .. [[segment_rules_]] .. dataType .. [[ s2
 ON s1.segment_name = s2.segment_group
 WHERE s1.segment_type = 'group'
 AND s2.segment_type = 'segment'
@@ -504,9 +504,9 @@ ORDER BY CASE
   WHEN s1.id = 142 THEN 132
   ELSE s1.id
 END, s1.id;]]
-   local result = dbCache.query{
+   local result = queryService.query{
       sql = query,
-      db = DBHelper.conn
+      db = database.conn
    }
    local groupName = result[1].segment_group:S()
    -- Create the hierarchy and reverse references used by the transition pass.
@@ -631,11 +631,11 @@ end
 -- Rule IDs 132 and 142 have an explicit ordering override in this query.
 local function DB(loop_code)
    local dataType = '270'
-   local query = "SELECT * FROM "..dbprefix.."segment_rules_"
+   local query = "SELECT * FROM "..tablePrefix.."segment_rules_"
    ..dataType.." WHERE segment_type = 'group' ORDER BY CASE WHEN id = 132 THEN 142 WHEN id = 142 THEN 132 ELSE id END, id;"
-   local return_value = dbCache.query{
+   local return_value = queryService.query{
       sql = query,
-      db = DBHelper.conn
+      db = database.conn
    }
 
    for i=1, #return_value do

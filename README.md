@@ -14,9 +14,9 @@ Rule tables describe segment groups, identifiers, ordering, optionality, and rep
 
 Runs within Iguana using its X12 parser and string helpers. Configure these generic integration names for your environment:
 
-- `rules.db_helper`: database connection (`conn`).
-- `rules.query_cache`: query interface (`query`).
-- `rules.config`: table prefix (`dbprefix`).
+- `database`: database connection (`conn`).
+- `query_service`: query interface (`query`).
+- `settings`: table prefix (`tablePrefix`).
 - `segment_rules_<dataType>`: segment and loop metadata.
 - `transaction_structure.vmd`: VMD used for repeat checks.
 
