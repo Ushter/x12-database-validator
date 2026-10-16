@@ -12,7 +12,7 @@ Rule tables describe segment groups, identifiers, ordering, optionality, and rep
 
 ## Recovery status
 
-This repository is an incomplete historical prototype. It is not a runnable validator distribution or a claim of X12 standards conformance.
+This repository is a partial prototype. It is not a runnable validator distribution or a claim of X12 standards conformance.
 
 Missing dependencies:
 
